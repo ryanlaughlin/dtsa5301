@@ -1,0 +1,224 @@
+---
+title: "NYC Police Shootings"
+output: html_document
+date: "2025-03-02"
+---
+## About the Data Source
+This data source entitled 'NYPD Shooting Incident Data (Historic) is data.gov hosted by data.gov. It lists every shooting incident that occurred from 2006 to 2023. More information about the data and the downloadable CSV itself can be found here: 
+https://catalog.data.gov/dataset/nypd-shooting-incident-data-historic
+
+## Objective
+The NYC Police Shootings dataset intrigued me on a personal level, as I myself live in New York City. Upon analyzing the dataset, I became particularly interested in understanding patterns related to the locations of shooting incidents throughout the city, especially when considering factors like time of day and the demographic profiles of victims.
+
+To uncover these patterns, I decided to use hierarchical clustering and a dendrogram. A dendrogram helps identify natural groupings within the data based on how similar shooting incidents are to one another in terms of location, time, and victim characteristics. By using this method, I can uncover clusters of incidents that share similar traits, without imposing any predefined categories on the data.
+
+These groupings allow me to focus on the relationships between these features and explore how the time of day and victim demographics influence the occurrence of shootings at particular locations. The dendrogram visually represents how incidents are connected and grouped, offering insights into which factors tend to coincide. This analysis could highlight areas with higher risks during specific times or provide a clearer picture of common patterns across the city.
+
+## Bias in the Data
+The dataset on police shootings appears to have an inherent bias due to several factors, notably the missing data, particularly for perpetrator details. This absence of complete information on perpetrators makes it challenging to fully understand the context of these incidents, as the only consistent data available pertains to the victims—mainly their age, race, and gender. This leads to an incomplete and possibly skewed representation of the incidents, where the overwhelming pattern shows young Black men as the primary victims.
+
+This bias could further distort the analysis, as it presents a one-sided view focused on the victim demographics, without offering sufficient context about the police officers involved. Additionally, the missing perpetrator information leaves out important factors that could alter the understanding of these events. This could lead to generalizations or misinterpretations if the data is not supplemented or contextualized with further information about the police force, their demographic makeup, and how they interact with different communities. Therefore, any analysis based on this dataset must be cautious of these limitations, and further investigation into the data gaps is crucial for a more balanced and accurate understanding.
+
+```{r libraries, eval=TRUE, echo=TRUE, message=FALSE, results="hide"}
+library(tidyr)
+library(ggplot2)
+library(dplyr)
+library(cluster)
+library(factoextra)
+```
+```{r get data, eval=TRUE, echo=TRUE}
+shootings <- read.csv("NYPD_Shooting_Incident_Data__Historic_.csv")
+str(shootings)
+colnames(shootings)
+```
+## EDA
+Since I am interested in understanding patterns regarding the location of police
+shootings, I want to gauge the data quality of the features I am interested in.
+Here I will generate visualizations to be able to gauge this data quality at a
+glance. This is a checkpoint to help me ensure there is enough data to make my
+insights viable and to capture any outliers/data problems that I'll need to
+resolve before creating my model. 
+
+```{r EDA, echo=TRUE, eval=TRUE}
+# Visualization - LOCATION_DESC
+ggplot(shootings, aes(x = LOCATION_DESC)) +
+  geom_bar(fill = "skyblue") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Count of Incidents by Location Description", x = "Location Description", y = "Count")
+# Visualization - STATISTICAL_MURDER_FLAG
+ggplot(shootings, aes(x = STATISTICAL_MURDER_FLAG)) +
+  geom_bar(fill = "lightgreen") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Count of Incidents by Statistical Murder Flag", x = "Murder Flag", y = "Count")
+# Visualization - VIC_AGE_GROUP
+ggplot(shootings, aes(x = VIC_AGE_GROUP)) +
+  geom_bar(fill = "coral") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Count of Incidents by Victim Age Group", x = "Victim Age Group", y = "Count")
+# Visualization - VIC_SEX
+ggplot(shootings, aes(x = VIC_SEX)) +
+  geom_bar(fill = "lightblue") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Count of Incidents by Victim Sex", x = "Victim Sex", y = "Count")
+# Visualization - VIC_RACE
+ggplot(shootings, aes(x = VIC_RACE)) +
+  geom_bar(fill = "lightpink") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Count of Incidents by Victim Race", x = "Victim Race", y = "Count")
+# Surface if there any missing time values
+sum(is.na(shootings$OCCUR_TIME))
+```
+## Data Cleaning 
+After visualizing my data I see I need to clean up some fields - see below for details. Once this is complete I will drop all fields which I don't intend to use. 
+
+- Incident Location - Feature Simplification: This is my primary features which I wish to use to build relationships with other features. There are upwards of 30 different values, the majority of which have small volume. Specifically there are multiple types of stores, including Check Cashing, with small volumes of instances. I will group them so as not to introduce noise into the model and hopefully will make the clusters more meaningful.
+
+- Incident Location - Null Handling: My visualizations have helped highlight that the Location Description field does not have a standardized way of expressing missing values. Null values can come in the form of nulls, empty strings and strings called "NONE". Since I am trying to draw relationships using incident location I will filter out each of these values.
+
+- Incident Time: Enabling Scaling: Since all non-numerical values need to be converted into factors in order to cluster, I will extract hour into its own column
+
+- Victim Age Group: Victim age group values are designed to be groupings, however
+the data quality issues with this dataset result in some integer values in this
+feature. Since the erroneous values are all integers I will filter those records out using some regex.
+
+```{r clean data}
+# Standardize missing data
+shootings_cleaned <- shootings %>%
+  filter(
+    !is.na(LOCATION_DESC) & LOCATION_DESC != "" & LOCATION_DESC != "null" & LOCATION_DESC != "NONE" & LOCATION_DESC != "(null)" ,
+    !is.na(STATISTICAL_MURDER_FLAG) & STATISTICAL_MURDER_FLAG != "" & STATISTICAL_MURDER_FLAG != "null" & STATISTICAL_MURDER_FLAG != "none",
+    !is.na(VIC_AGE_GROUP) & VIC_AGE_GROUP != "" & VIC_AGE_GROUP != "null" & VIC_AGE_GROUP != "none" & VIC_AGE_GROUP != "UNKNOWN",
+    !is.na(VIC_SEX) & VIC_SEX != "" & VIC_SEX != "null" & VIC_SEX != "none",
+    !is.na(VIC_RACE) & VIC_RACE != "" & VIC_RACE != "null" & VIC_RACE != "none",
+    !is.na(OCCUR_TIME) & OCCUR_TIME != "" & OCCUR_TIME != "null" & OCCUR_TIME != "none"
+  )
+# Combine locations containing the word "store" + "check cash" into a single category
+shootings_cleaned$LOCATION_DESC <- ifelse(grepl("store", shootings_cleaned$LOCATION_DESC, ignore.case = TRUE) |  grepl("CHECK CASH", shootings_cleaned$LOCATION_DESC, ignore.case = TRUE), "STORE", shootings_cleaned$LOCATION_DESC)
+
+# Extract hour from occur_time
+shootings_cleaned$occur_hour <- as.integer(format(as.POSIXct(shootings_cleaned$OCCUR_TIME, format="%H:%M:%S"), "%H"))
+
+# Select only relevant columns
+shootings_cleaned <- shootings_cleaned %>%
+  select(occur_hour, LOCATION_DESC, VIC_RACE, VIC_SEX, VIC_AGE_GROUP, STATISTICAL_MURDER_FLAG)
+
+str(shootings_cleaned)
+```
+## Post-Cleaning Visualizations
+```{r view cleaned data, echo=TRUE, eval=TRUE}
+location_counts <- shootings_cleaned %>%
+  count(LOCATION_DESC)
+
+# Plot histogram of occur_hour
+ggplot(shootings_cleaned, aes(x = occur_hour)) +
+  geom_histogram(binwidth = 1, fill = "skyblue", color = "black") +
+  labs(title = "Distribution of Shooting Incidents by Hour", 
+       x = "Hour of Day", 
+       y = "Count of Incidents") +
+  theme_minimal() +
+  scale_x_continuous(breaks = seq(0, 23, 1))
+
+# Visualization for LOCATION_DESC
+ggplot(shootings_cleaned, aes(x = LOCATION_DESC)) +
+  geom_bar(fill = "skyblue") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Count of Incidents by Location Description - Post-Cleaning", x = "Location Description", y = "Count")
+
+ggplot(shootings_cleaned, aes(x = VIC_AGE_GROUP)) +
+  geom_bar(fill = "coral") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Count of Incidents by Victim Age Group - Post-Cleaning", x = "Victim Age Group", y = "Count")
+
+
+```
+
+### Additional Cleaning Required
+Even after cleaning the data and merging 'stores' into its own category, the
+above chart tells me there are still too many values with low volumes in the
+Location Description category. Rather than performing and further grouping I
+decide to filter out any locations with fewer than 100 incidents.
+
+```{r prepare data, eval=TRUE, echo=TRUE}
+# Set threshold
+location_counts <- shootings_cleaned %>%
+  count(LOCATION_DESC) %>%
+  filter(n >= 100)
+
+# Join 
+shootings_cleaned <- shootings_cleaned %>%
+  filter(LOCATION_DESC %in% location_counts$LOCATION_DESC)
+
+ggplot(shootings_cleaned, aes(x = LOCATION_DESC)) +
+  geom_bar(fill = "skyblue") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Count of Incidents by Location Description (Filtered)", x = "Location Description", y = "Count")
+
+```
+
+## Model Building 
+Now that my data is sufficiently cleaned I will build the dendogram to visualize hierarchical clustering. I will do this in two different steps.
+
+1. Standardize the data: All categorized 'string' values need to be integers to work in a dendogram. I'll need to convert them as one of my final tasks in data preparation.
+2. Scale the data: data needs to be on the same scale so that I don't inadverntently skew the results because the value of features are operating on differentl scales.
+3. Run the model: With the data prepared I will pass it into my dendogram function and then visualize the results.
+
+### Prepare and scale the data
+
+```{r scaled, eval=TRUE, echo=TRUE}
+# Convert values into integers
+shootings_cleaned$LOCATION_DESC <- as.numeric(factor(shootings_cleaned$LOCATION_DESC))
+shootings_cleaned$VIC_RACE <- as.numeric(factor(shootings_cleaned$VIC_RACE))
+shootings_cleaned$VIC_SEX <- as.numeric(factor(shootings_cleaned$VIC_SEX))
+shootings_cleaned$VIC_AGE_GROUP <- as.numeric(factor(shootings_cleaned$VIC_AGE_GROUP))
+shootings_cleaned$STATISTICAL_MURDER_FLAG <- as.numeric(factor(shootings_cleaned$STATISTICAL_MURDER_FLAG))
+
+# Scale the data
+scaled_data <- scale(shootings_cleaned[, c("occur_hour", "VIC_AGE_GROUP", "STATISTICAL_MURDER_FLAG")])
+
+# Update shootings_cleaned to include scaled values
+shootings_cleaned[, c("occur_hour", "VIC_AGE_GROUP", "STATISTICAL_MURDER_FLAG")] <- scaled_data
+
+```
+
+### Time to Create the Model
+My model generation keeps timing out, so I will remove Race and Gender columns since they are predominantly black and male. 
+Additionally I had to sample the data because R was timing out. Dendograms are computations expensive (Big O of n squared) and since i'm using R Cloud on the free version I didn't have enough memory to complete the job. 
+
+```{r cluster_data, eval=TRUE, echo=TRUE}
+# Convert categorical variables to factors and then to numeric
+cluster_data <- shootings_cleaned %>%
+  select(LOCATION_DESC, occur_hour, VIC_AGE_GROUP, STATISTICAL_MURDER_FLAG) %>%
+  filter(!is.na(LOCATION_DESC) & LOCATION_DESC != "",
+         !is.na(occur_hour) & occur_hour != "",
+         !is.na(VIC_AGE_GROUP) & VIC_AGE_GROUP != "",
+         !is.na(STATISTICAL_MURDER_FLAG) & STATISTICAL_MURDER_FLAG != "")
+```
+
+### Create Dendogram
+```{r dendogram, eval=TRUE, echo=TRUE}
+# Sample the data
+set.seed(111)
+sampled_data <- cluster_data %>%
+  sample_n(1000)
+
+# Dendogram
+dendrogram <- hclust(dist(sampled_data))
+
+# Plotting the dendrogram
+plot(dendrogram, 
+     main = "Dendrogram of NYC Police Shootings",
+     xlab = "Observations", 
+     ylab = "Height", 
+     hang = -1, 
+     cex.axis = 0.7,  
+     cex.main = 1.2,  
+     cex.lab = 1.0)
+
+clusters <- cutree(dendrogram, k = 4)
+table(clusters)  # Show the number of observations in each cluster
+```
+
+## Result
+The hierarchical clustering dendrogram provided valuable insights into the NYC Police Shootings dataset, revealing that the data naturally splits into four clusters. This information helps refine the k-means clustering process by setting the number of clusters during further anlaysis (K = 4) and validating the size of clusters. 
+
+By aligning k-means with the structure shown in the dendrogram, we can ensure more meaningful and accurate clusters that better represent patterns in the data, such as high-risk locations, times of day, and victim profiles. Interestingly cluster #4 with only 34  observations may represent outlier cases which requires their own specific prevention strategies.
